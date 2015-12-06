@@ -1,6 +1,7 @@
 import getpass
 import oauth2
 import pytumblr
+import sys
 import urllib
 import urlparse
 
@@ -48,7 +49,14 @@ class TumblrXAuth:
         self.__consumer_secret = consumer_secret
         self.__username = username
         self.__password = password
-        self.__access_token = None
+
+        # See https://gist.github.com/codingjester/1298749
+        consumer = oauth2.Consumer(self.__consumer_key, self.__consumer_secret)
+        client = self.__get_client(consumer)
+        params = self.__get_params()
+        resp, token = client.request(access_token_url, method="POST", body=urllib.urlencode(params))
+        self.__access_token = dict(urlparse.parse_qsl(token))
+        self.__response = resp
 
     def __get_params(self):
         return {
@@ -66,20 +74,14 @@ class TumblrXAuth:
         return client
 
     def __get_access_token(self):
-        if self.__access_token == None:
-            consumer = oauth2.Consumer(self.__consumer_key, self.__consumer_secret)
-            client = self.__get_client(consumer)
-
-            params = self.__get_params()
-            resp, token = client.request(access_token_url, method="POST", body=urllib.urlencode(params))
-            self.__access_token = dict(urlparse.parse_qsl(token))
-
         return self.__access_token
 
     access_token = property(__get_access_token)
 
-    def clear(self):
-        self.access_token = None
+    def __get_response(self):
+        return self.__response
+
+    response = property(__get_response)
 
 if __name__ == '__main__':
     credentials = Credentials()
@@ -93,6 +95,24 @@ if __name__ == '__main__':
     print config.tumblr_consumer_key
     print config.tumblr_consumer_secret
 
-    xauth = TumblrXAuth(config.tumblr_consumer_key, config.tumblr_consumer_secret, credentials.username, credentials.password)
+    xauth = TumblrXAuth(
+        config.tumblr_consumer_key,
+        config.tumblr_consumer_secret,
+        credentials.username,
+        credentials.password
+    )
+    print xauth.response
     print xauth.access_token
-    print xauth.access_token
+
+    if xauth.response['status'] != '200':
+        print 'Error! Authentication failed.'
+        sys.exit(int(xauth.response['status']))
+
+    client = pytumblr.TumblrRestClient(
+        config.tumblr_consumer_key,
+        config.tumblr_consumer_secret,
+        xauth.access_token['oauth_token'],
+        xauth.access_token['oauth_secret']
+    )
+
+    print client.info()
