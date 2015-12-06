@@ -106,7 +106,7 @@ if __name__ == '__main__':
 
     if xauth.response['status'] != '200':
         print 'Error! Authentication failed.'
-        sys.exit(int(xauth.response['status']))
+        sys.exit(1)
 
     client = pytumblr.TumblrRestClient(
         config.tumblr_consumer_key,
