@@ -1,5 +1,5 @@
-import getpass
 import oauth2
+import pprint
 import pytumblr
 import sys
 import urllib
@@ -8,25 +8,10 @@ import urlparse
 import ConfigParser
 
 access_token_url = 'https://www.tumblr.com/oauth/access_token'
+authorize_url = 'http://www.tumblr.com/oauth/authorize'
+request_token_url = 'http://www.tumblr.com/oauth/request_token'
 
-class Credentials:
-    def __init__(self):
-        self.__username = None
-        self.__password = None
-
-    def ask_credentials(self):
-        self.__username = raw_input("Username: ")
-        self.__password = getpass.getpass("Password: ")
-
-    def __get_username(self):
-        return self.__username
-
-    username = property(__get_username)
-
-    def __get_password(self):
-        return self.__password
-
-    password = property(__get_password)
+g_request = None
 
 class Config:
     def __init__(self):
@@ -35,43 +20,51 @@ class Config:
 
     def __get_tumblr_consumer_key(self):
         return self.__config.get('tumblr', 'consumer_key')
-
     tumblr_consumer_key = property(__get_tumblr_consumer_key)
 
     def __get_tumblr_consumer_secret(self):
         return self.__config.get('tumblr', 'consumer_secret')
-
     tumblr_consumer_secret = property(__get_tumblr_consumer_secret)
 
-class TumblrXAuth:
-    def __init__(self, consumer_key, consumer_secret, username, password):
+    def __get_tumblr_oauth_token(self):
+        return self.__config.get('tumblr', 'oauth_token')
+    tumblr_oauth_token = property(__get_tumblr_oauth_token)
+
+    def __get_tumblr_oauth_token_secret(self):
+        return self.__config.get('tumblr', 'oauth_token_secret')
+    tumblr_oauth_token_secret = property(__get_tumblr_oauth_token_secret)
+
+class TumblrAuth:
+    def __init__(self, consumer_key, consumer_secret):
+        global g_request
+
         self.__consumer_key = consumer_key
         self.__consumer_secret = consumer_secret
-        self.__username = username
-        self.__password = password
 
-        # See https://gist.github.com/codingjester/1298749
         consumer = oauth2.Consumer(self.__consumer_key, self.__consumer_secret)
-        client = self.__get_client(consumer)
-        params = self.__get_params()
-        resp, token = client.request(access_token_url, method="POST", body=urllib.urlencode(params))
-        self.__access_token = dict(urlparse.parse_qsl(token))
-        self.__response = resp
-
-    def __get_params(self):
-        return {
-            'x_auth_username': self.__username,
-            'x_auth_password': self.__password,
-            'x_auth_mode': 'client_auth'
-        }
-
-    def __get_client(self, consumer):
         client = oauth2.Client(consumer)                                                                                                                                                      
-        client.add_credentials(self.__username, self.__password)
-        client.authorizations  
 
-        client.set_signature_method = oauth2.SignatureMethod_HMAC_SHA1()
-        return client
+        # Get request token
+        resp, content = client.request(request_token_url, method="POST")
+        request_token =  urlparse.parse_qs(content)
+
+        # Redirect to authentication page
+        print '\nPlease go here and authorize:\n%s?oauth_token=%s' % (authorize_url, request_token['oauth_token'][0])
+        redirect_response = raw_input('Allow then paste the full redirect URL here:\n')
+
+        # Retrieve oauth verifier
+        url = urlparse.urlparse(redirect_response)
+        query_dict = urlparse.parse_qs(url.query)
+        oauth_verifier = query_dict['oauth_verifier'][0]
+
+        # Request access token
+        token = oauth2.Token(request_token['oauth_token'], request_token['oauth_token_secret'][0])
+        token.set_verifier(oauth_verifier)
+        client = oauth2.Client(consumer, token)
+
+        resp, content = client.request(access_token_url, "POST")
+        self.__access_token = dict(urlparse.parse_qsl(content))
+        self.__response = resp
 
     def __get_access_token(self):
         return self.__access_token
@@ -83,36 +76,74 @@ class TumblrXAuth:
 
     response = property(__get_response)
 
+class IterFollowing:
+    def __init__(self, client):
+        self.__client = client
+        self.__offset = 0
+        self.__limit = 20
+        self.__position = self.__limit
+        self.__following = None
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        if self.__position >= self.__limit:
+            self.__offset += self.__limit
+            self.__position = 0
+            self.__following = self.__client.following(limit=self.__limit, offset=self.__offset)
+
+        if not self.__following.has_key('blogs') or len(self.__following['blogs']) == 0 or self.__position == len(self.__following['blogs']):
+            raise StopIteration()
+
+        value = self.__following['blogs'][self.__position]
+        self.__position += 1
+        return value
+
+class SavedAuth:
+    def __init__(self, oauth_token, oauth_token_secret):
+        self.__oauth_token = oauth_token
+        self.__oauth_token_secret = oauth_token_secret
+
+    def __get_access_token(self):
+        return {'oauth_token': self.__oauth_token, 'oauth_token_secret': self.__oauth_token_secret}
+    access_token = property(__get_access_token)
+
+    def __get_response(self):
+        return {'status': '200'}
+    response = property(__get_response)
+
 if __name__ == '__main__':
-    credentials = Credentials()
-    credentials.ask_credentials()
-
     config = Config()
-
-    print credentials.username
-    print '*' * len(credentials.password)
 
     print config.tumblr_consumer_key
     print config.tumblr_consumer_secret
 
-    xauth = TumblrXAuth(
-        config.tumblr_consumer_key,
-        config.tumblr_consumer_secret,
-        credentials.username,
-        credentials.password
-    )
-    print xauth.response
-    print xauth.access_token
+    if len(sys.argv) == 3:
+        auth = SavedAuth(*sys.argv[1:])
+    else:
+        auth = TumblrAuth(
+            config.tumblr_consumer_key,
+            config.tumblr_consumer_secret
+        )
 
-    if xauth.response['status'] != '200':
+    print auth.response
+    print auth.access_token
+
+    if auth.response['status'] != '200':
         print 'Error! Authentication failed.'
         sys.exit(1)
 
+    # See https://github.com/tumblr/pytumblr
     client = pytumblr.TumblrRestClient(
         config.tumblr_consumer_key,
         config.tumblr_consumer_secret,
-        xauth.access_token['oauth_token'],
-        xauth.access_token['oauth_secret']
+        auth.access_token['oauth_token'],
+        auth.access_token['oauth_token_secret']
     )
 
     print client.info()
+
+    for blog in IterFollowing(client):
+        print
+        pprint.pprint(blog)
