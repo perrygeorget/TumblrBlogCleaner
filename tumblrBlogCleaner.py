@@ -2,6 +2,7 @@ import oauth2
 import pprint
 import pytumblr
 import sys
+import time
 import urllib
 import urlparse
 
@@ -18,20 +19,28 @@ class Config:
         self.__config = ConfigParser.ConfigParser()
         self.__config.read('config.ini')
 
+    def __safe_get(self, section, option):
+        if not self.__config.has_section(section):
+            return None
+        if not self.__config.has_option(section, option):
+            return None
+        else:
+            return self.__config.get(section, option)
+
     def __get_tumblr_consumer_key(self):
-        return self.__config.get('tumblr', 'consumer_key')
+        return self.__safe_get('tumblr', 'consumer_key')
     tumblr_consumer_key = property(__get_tumblr_consumer_key)
 
     def __get_tumblr_consumer_secret(self):
-        return self.__config.get('tumblr', 'consumer_secret')
+        return self.__safe_get('tumblr', 'consumer_secret')
     tumblr_consumer_secret = property(__get_tumblr_consumer_secret)
 
     def __get_tumblr_oauth_token(self):
-        return self.__config.get('tumblr', 'oauth_token')
+        return self.__safe_get('tumblr', 'oauth_token')
     tumblr_oauth_token = property(__get_tumblr_oauth_token)
 
     def __get_tumblr_oauth_token_secret(self):
-        return self.__config.get('tumblr', 'oauth_token_secret')
+        return self.__safe_get('tumblr', 'oauth_token_secret')
     tumblr_oauth_token_secret = property(__get_tumblr_oauth_token_secret)
 
 class TumblrAuth:
@@ -113,6 +122,30 @@ class SavedAuth:
         return {'status': '200'}
     response = property(__get_response)
 
+class PostScanner:
+    def __init__ (self, post):
+         self._post = post
+
+    def __get_date(self):
+        return time.ctime(self.__get_timestamp())
+    date = property(__get_date)
+
+    def __get_timestamp(self):
+        return int(self._post['timestamp'])
+    timestamp = property(__get_date)
+
+    def __get_age(self):
+        return time.time() - self.__get_timestamp()
+    age = property(__get_age)
+
+    def __get_format(self):
+        return self._post['format']
+    format = property(__get_format)
+
+    def __get_type(self):
+        return self._post['type']
+    type = property(__get_type)
+
 if __name__ == '__main__':
     config = Config()
 
@@ -121,6 +154,8 @@ if __name__ == '__main__':
 
     if len(sys.argv) == 3:
         auth = SavedAuth(*sys.argv[1:])
+    elif config.tumblr_oauth_token is not None and config.tumblr_oauth_token_secret is not None:
+        auth = SavedAuth(config.tumblr_oauth_token, config.tumblr_oauth_token_secret)
     else:
         auth = TumblrAuth(
             config.tumblr_consumer_key,
@@ -146,4 +181,12 @@ if __name__ == '__main__':
 
     for blog in IterFollowing(client):
         print
-        pprint.pprint(blog)
+        print
+        print blog['name']
+
+        posts = client.posts(blog['name'], limit=10)
+        for post in posts['posts']:
+            post = PostScanner(post)
+            print
+            print 'type: %s' % (post.type,)
+            print 'date: %s' % (post.date,)
