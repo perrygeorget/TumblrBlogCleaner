@@ -18,6 +18,8 @@ You will need to create `config.ini` at the root of this repository:
     [tumblr]
     consumer_key=<consumer_key>
     consumer_secret=<consumer_secret>
+    oauth_token=<oauth_token>
+    oauth_token_secret=<oauth_token_secret>
 
 ## Building Docker Image
 
