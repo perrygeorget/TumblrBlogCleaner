@@ -1,6 +1,8 @@
 import oauth2
 import pprint
 import pytumblr
+import re
+import surblclient
 import sys
 import time
 import urllib
@@ -13,6 +15,7 @@ authorize_url = 'http://www.tumblr.com/oauth/authorize'
 request_token_url = 'http://www.tumblr.com/oauth/request_token'
 
 g_request = None
+g_whitelist = []
 
 class Config:
     def __init__(self):
@@ -90,22 +93,27 @@ class IterFollowing:
         self.__client = client
         self.__offset = 0
         self.__limit = 20
-        self.__position = self.__limit
+        self.__position = 0
         self.__following = None
 
     def __iter__(self):
         return self
 
     def next(self):
-        if self.__position >= self.__limit:
-            self.__offset += self.__limit
-            self.__position = 0
-            self.__following = self.__client.following(limit=self.__limit, offset=self.__offset)
+        position = self.__position % self.__limit
 
-        if not self.__following.has_key('blogs') or len(self.__following['blogs']) == 0 or self.__position == len(self.__following['blogs']):
+        if position == 0:
+            #print 'position %d, offset %d' % (self.__position, self.__offset,)
+
+            self.__offset += self.__limit
+            self.__following = self.__client.following(limit=self.__limit, offset=self.__offset)
+            #print 'got %d blogs' % (len(self.__following['blogs']),)
+
+        if not self.__following.has_key('blogs') or len(self.__following['blogs']) == 0 or position >= len(self.__following['blogs']):
+            #print 'last at position %d' % (self.__position,)
             raise StopIteration()
 
-        value = self.__following['blogs'][self.__position]
+        value = self.__following['blogs'][position]
         self.__position += 1
         return value
 
@@ -126,13 +134,17 @@ class PostScanner:
     def __init__ (self, post):
          self._post = post
 
+    def __get_id(self):
+        return int(self._post['id'])
+    id = property(__get_id)
+
     def __get_date(self):
         return time.ctime(self.__get_timestamp())
     date = property(__get_date)
 
     def __get_timestamp(self):
         return int(self._post['timestamp'])
-    timestamp = property(__get_date)
+    timestamp = property(__get_timestamp)
 
     def __get_age(self):
         return time.time() - self.__get_timestamp()
@@ -146,11 +158,51 @@ class PostScanner:
         return self._post['type']
     type = property(__get_type)
 
+    def __get_domains(self):
+        urls = []
+        for text in self.__deep_values(self._post, 7):
+            try:
+                extracted = re.search("(?P<url>https?://[^\s\"']+)", text).groups("url")
+                urls.extend(extracted)
+            except:
+                pass
+
+        domains = {}
+        for url in urls:
+            domain = re.search("://(?P<domain>[^/]+)", url).group("domain")
+            domains[domain] = True
+        return domains.keys()
+    domains = property(__get_domains)
+
+    def __is_spammy(self):
+        global g_whitelist
+
+        for domain in self.__get_domains():
+            if domain in g_whitelist:
+                continue
+            if domain in surblclient.surbl:
+                return True
+            else:
+                g_whitelist.append(domain)
+		return False
+    spammy = property(__is_spammy)
+
+    def __deep_values(self, d, depth):
+        if depth == 1:
+            for i in d.values():
+                yield i
+        else:
+            for v in d.values():
+                if isinstance(v, dict):
+                    for i in self.__deep_values(v, depth-1):
+                        yield i
+                yield v
+
 if __name__ == '__main__':
     config = Config()
 
-    print config.tumblr_consumer_key
-    print config.tumblr_consumer_secret
+    #print config.tumblr_consumer_key
+    #print config.tumblr_consumer_secret
 
     if len(sys.argv) == 3:
         auth = SavedAuth(*sys.argv[1:])
@@ -162,8 +214,8 @@ if __name__ == '__main__':
             config.tumblr_consumer_secret
         )
 
-    print auth.response
-    print auth.access_token
+    #print auth.response
+    #print auth.access_token
 
     if auth.response['status'] != '200':
         print 'Error! Authentication failed.'
@@ -177,16 +229,40 @@ if __name__ == '__main__':
         auth.access_token['oauth_token_secret']
     )
 
-    print client.info()
+    #print client.info()
 
+    now = time.time()
+
+    blogs_to_unfollow = list()
     for blog in IterFollowing(client):
-        print
         print
         print blog['name']
 
-        posts = client.posts(blog['name'], limit=10)
+        spammy = False
+        old = False
+        timestamp = 0
+
+        time.sleep(1)
+        posts = client.posts(blog['name'], limit=50)
+
         for post in posts['posts']:
+            time.sleep(1)
             post = PostScanner(post)
-            print
-            print 'type: %s' % (post.type,)
-            print 'date: %s' % (post.date,)
+            timestamp = max(timestamp, post.timestamp)
+            if not spammy and post.spammy:
+                spammy = True
+
+        if timestamp < (now - 60 * 60 * 24 * 365):
+            old = True
+        print 'spammy: %s' % (spammy,)
+        print 'old: %s' % (old,)
+
+        if spammy or old:
+            blogs_to_unfollow.append(blog)
+
+    print
+    print '* Unfollow'
+    for blog in blogs_to_unfollow:
+        print blog['name']
+        time.sleep(1)
+        response = client.unfollow(blog['name'])

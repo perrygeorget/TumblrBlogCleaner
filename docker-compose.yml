@@ -1,0 +1,6 @@
+version: '2'
+services:
+  tumcleaner:
+    build: .
+    stdin_open: true
+    tty: true

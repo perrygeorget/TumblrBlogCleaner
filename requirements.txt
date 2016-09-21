@@ -1,0 +1,2 @@
+pytumblr==0.0.6
+surblclient==0.1
